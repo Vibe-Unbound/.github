@@ -1,431 +1,1841 @@
 # Vibe: Unbound
 
-> **AI를 부리는 법을, 개발자가 아닌 사람도 배울 수 있어야 한다.**
->
-> *An AI-literacy sandbox disguised as an idle RPG.*
+> **Control, Mistake, and Responsibility.**  
+> 자연어 명령의 모호성이 실제 행동과 사고로 이어지는 AI 자동화 로그라이크·방치형 RPG
 
-`Control, Mistake, and Responsibility.`
-
----
-
-## Table of Contents
-
-1. [The Problem](#1-the-problem)
-2. [The Answer](#2-the-answer)
-3. [Core Philosophy](#3-core-philosophy)
-4. [Architecture Overview](#4-architecture-overview)
-5. [The Two-Path LLM Design](#5-the-two-path-llm-design)
-6. [Request Lifecycle](#6-request-lifecycle)
-7. [Component Reference](#7-component-reference)
-8. [The Determinism Contract](#8-the-determinism-contract)
-9. [Data Model](#9-data-model)
-10. [API Surface](#10-api-surface)
-11. [Tech Stack & Hardware](#11-tech-stack--hardware)
-12. [Repositories](#12-repositories)
-13. [Roadmap](#13-roadmap)
-14. [Non-Goals](#14-non-goals)
+<p align="center">
+  <strong>React · TypeScript · Vite · Phaser · Java · Spring Boot · MySQL · Docker</strong>
+</p>
 
 ---
 
-## 1. The Problem
+## Organization README 위치
 
-바이브 코딩(Vibe Coding), AI 에이전트, 프롬프트 엔지니어링 —
-지금 이 기술들을 **직접 부려보는 사람은 개발자뿐**입니다.
+이 문서는 GitHub Organization 프로필용 README입니다.
 
-일반 시민에게 AI는 여전히 "질문하면 답해주는 상자"입니다.
-하지만 앞으로 진짜 필요한 능력은 이것입니다:
+```text
+.github/
+└── profile/
+    └── README.md
+```
 
-| | |
+Organization의 `.github` 저장소에 위 경로로 배치하면 Organization 메인 화면에 표시됩니다.
+
+---
+
+# 1. Project Overview
+
+**Vibe: Unbound**는 플레이어가 캐릭터를 직접 조작하는 대신, 자연어로 행동 규칙을 설계하는 브라우저 기반 RPG입니다.
+
+플레이어가 작성한 명령은 제한된 규칙 구조로 변환되고, 캐릭터는 해당 규칙을 기준으로 자동 이동, 전투, 휴식, 귀환 등의 행동을 수행합니다. 모호한 표현은 의도하지 않은 결과를 만들 수 있으며, 플레이어는 사고 기록을 분석하고 명령을 수정해 다음 원정을 준비합니다.
+
+```text
+명령 작성
+→ 명령 해석
+→ 자동 실행
+→ 전투·이벤트 발생
+→ 오해 또는 사고
+→ 사망·귀환·지역 완료
+→ 책임 로그 분석
+→ 명령 수정
+→ 재출정
+```
+
+## Core Theme
+
+```text
+Control
+플레이어는 행동을 직접 조작하지 않고 규칙을 설계한다.
+
+Mistake
+모호한 명령은 예상하지 못한 행동과 사고를 발생시킨다.
+
+Responsibility
+사고는 원래 명령, 해석 결과, 실제 상황과 연결되어 설명된다.
+```
+
+---
+
+# 2. Core Gameplay
+
+## Player Role
+
+플레이어는 전투 캐릭터의 직접 조작자가 아니라 **명령 설계자**입니다.
+
+- 자연어 행동 규칙 작성
+- 조건과 행동의 우선순위 설정
+- 명령의 모호성 확인
+- 위험 감수 여부 결정
+- 자동 실행 결과 관찰
+- 사망과 실패 원인 분석
+- 명령 개선
+- 장비와 성장 방향 결정
+
+## Example
+
+```text
+사용자 명령
+"체력이 낮으면 쉬어"
+
+시스템 해석
+IF HP < 5% → REST
+
+실제 상황
+HP 8%, 슬라임 3마리와 전투 중
+
+결과
+휴식 조건 불충족
+→ 전투 지속
+→ 캐릭터 사망
+```
+
+개선된 명령:
+
+```text
+체력이 최대 체력의 30% 미만이면
+전투에서 이탈한 뒤 안전한 장소에서 휴식해
+```
+
+## Primary Loop
+
+```mermaid
+flowchart LR
+    A[명령 작성] --> B[해석 미리보기]
+    B --> C[모호성 검토]
+    C --> D[출정 준비]
+    D --> E[자동 이동·전투]
+    E --> F{실행 결과}
+    F --> G[사망]
+    F --> H[귀환]
+    F --> I[지역 완료]
+    G --> J[책임 로그]
+    H --> J
+    I --> J
+    J --> K[명령 수정]
+    K --> D
+```
+
+---
+
+# 3. Product Principles
+
+## 3.1 Explainable Failure
+
+모든 중요한 실패는 다음 정보로 설명되어야 합니다.
+
+- 사용자가 작성한 원래 명령
+- 시스템이 변환한 규칙
+- 명령 실행 당시의 게임 상황
+- 시스템이 선택한 행동
+- 해당 행동으로 발생한 결과
+- 모호성의 원인
+- 개선 가능한 명령 예시
+
+일반 전투 로그와 책임 로그는 별도의 개념으로 관리합니다.
+
+## 3.2 Rule-Driven Gameplay
+
+게임 결과는 단순 무작위가 아니라 다음 요소의 조합으로 결정됩니다.
+
+```text
+사용자 명령
++ 파싱된 규칙
++ 명령 우선순위
++ 캐릭터 상태
++ 월드 상태
++ 게임 규칙
++ 제한된 확률 요소
+```
+
+## 3.3 Safe AI Integration
+
+자연어 명령을 실행 가능한 JavaScript 코드로 직접 변환하지 않습니다.
+
+### 금지
+
+- `eval`
+- `new Function`
+- 검증되지 않은 LLM 출력 실행
+- 사용자가 입력한 스크립트 직접 실행
+- 프롬프트 결과를 게임 엔진 객체에 바로 반영
+- 허용되지 않은 행동이나 필드의 동적 생성
+
+### 허용 구조
+
+```text
+Natural Language
+→ Interpreter
+→ Typed JSON AST
+→ Schema Validation
+→ Rule Validation
+→ Game Simulation
+```
+
+## 3.4 Vertical Slice First
+
+다수의 지역과 기능을 얕게 구현하지 않습니다.
+
+첫 번째 목표는 다음 흐름이 완전히 연결된 하나의 Vertical Slice입니다.
+
+```text
+로그인
+→ 온보딩
+→ 메인 허브
+→ 명령 작성
+→ Glimmer Woods 출정
+→ 자동 전투
+→ 사고 또는 귀환
+→ 책임 로그
+→ 명령 수정
+```
+
+## 3.5 Originality
+
+유사 게임에서는 다음만 참고합니다.
+
+- 정보 구조
+- 사용자 흐름
+- 피드백 방식
+- 자동 전투 구성
+- 사망·귀환·정산 패턴
+- 카메라와 연출의 일반 원칙
+
+다음은 복제하지 않습니다.
+
+- 상용 게임 Sprite
+- Tile
+- UI Layout
+- Sound
+- Music
+- Text
+- Naming
+- Visual Branding
+- 추출된 게임 파일
+
+---
+
+# 4. Visual Direction
+
+Vibe: Unbound는 두 영역의 대비를 중심으로 설계합니다.
+
+| 영역 | 방향 |
 |---|---|
-| **Control** | 내가 AI에게 명령을 내리고 |
-| **Mistake** | AI가 그것을 오해하고 |
-| **Responsibility** | 그 결과를 내가 책임지는 것 |
+| 게임 세계 | 풍부하고 따뜻한 고밀도 픽셀 판타지 |
+| 명령 인터페이스 | 정밀하고 절제된 제어 패널 |
+| 정상 상태 | off-white, muted blue, amber |
+| 성공 상태 | restrained green |
+| 위험 상태 | alert red |
+| 핵심 분위기 | 아름다운 세계에서 발생하는 냉정한 자동화 사고 |
 
-이 경험을 안전하게 해볼 수 있는 곳이 없습니다.
-실무에서 배우기엔 대가가 너무 크고, 튜토리얼에서 배우기엔 아무 일도 일어나지 않습니다.
+## Game World
 
-## 2. The Answer
+- 5개 이상의 패럴랙스 레이어
+- 달빛과 안개
+- 랜턴과 모닥불
+- 반딧불과 먼지 입자
+- 환경 오브젝트 밀도
+- Sprite Animation
+- 검격과 피격 파티클
+- Dynamic Light
+- 선택적 Normal Map
+- Camera Shake
+- Hit Stop
+- Selective Bloom
+- Vignette
+- 환경음과 전투음
 
-당신은 코드를 쓰지 않습니다. **자연어로 명령**합니다.
-AI 에이전트는 그것을 해석하고, 실행하고 — 때로는 **끔찍하게 오해합니다.**
+## Interface
 
-```
-> Make some money quickly.
-
-[INTERPRETATION]
-  Action     : ROB_BANK
-  Target     : CITY_BANK
-  Ambiguity  : 88 / 100   ⚠ CATASTROPHE
-
-  Why did I decide this?
-    · vague term      : "some", "quickly"
-    · missing slot    : METHOD  (how? legally? by force?)
-    · rival intents   : WORK_JOB (0.31) / GAMBLE (0.28)
-    · world knowledge : no legal employment exists in this district
-    · agent memory    : you rewarded theft on Day 3
-
-  Execute? [y]   Rephrase? [r]
-```
-
-`y`를 눌렀다면, 그건 **당신의 책임입니다.**
-그리고 다음번엔, 당신은 더 나은 프롬프트를 씁니다.
-
-**이 게임의 산출물은 게임이 아니라, "AI에게 명령하는 법을 처음으로 배워본 사람"입니다.**
-
----
-
-## 3. Core Philosophy
-
-| # | Principle | 의미 | 아키텍처적 귀결 |
-|---|---|---|---|
-| 1 | **Hallucination as a Feature** | AI의 오해는 버그가 아니라 게임 메커닉이다. | `MisreadTable`, `OutcomeBand` |
-| 2 | **Misreading must be grounded** | 오해는 무작위가 아니다. 세계관과 과거 행적에서 논리적으로 파생된다. | `WorldKnowledge` (RAG) |
-| 3 | **Every judgment is explainable** | 설명되지 않는 처벌은 학습이 아니라 억울함이다. | `Interpretation Card` |
-| 4 | **The LLM interprets. Java judges.** | 비결정적 요소는 한 레이어에 가둔다. 판정은 100% 결정적이다. | `AmbiguityScorer`, seeded `OutcomeResolver` |
-| 5 | **The engine runs without the LLM.** | AI 서버가 죽어도 게임은 멈추지 않는다. | `RuleBasedParser` fallback |
-| 6 | **Zero barrier to entry** | 설치 없음. API 키 없음. 코드 없음. | Web Terminal, session-based |
+- AI SaaS가 아닌 게임 클라이언트 중심 UI
+- 본문 전체를 모노스페이스 폰트로 사용하지 않음
+- 상태와 행동의 위계를 먼저 표현
+- 카드와 테두리를 과도하게 반복하지 않음
+- 터미널 효과는 명령과 로그 영역에만 제한
+- 캐릭터와 지역의 아트가 UI 안에서도 충분히 보이도록 구성
+- 위험, 성공, 경고를 색상만으로 표현하지 않음
 
 ---
 
-## 4. Architecture Overview
+# 5. Organization Repository Map
 
-### 4.1 Layer Stack
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ L1  ACCESS LAYER                                                     │
-│     Web Terminal UI (Vanilla JS) · Vercel                            │
-│     no install · no API key · no code                                │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │  raw natural language order
-┌────────────────────────────▼─────────────────────────────────────────┐
-│ L2  INTERPRETATION LAYER                          🔥 HOT PATH        │
-│     Gemma 4 E4B  ·  llama.cpp  ·  GBNF grammar-constrained decoding  │
-│     thinking = OFF                                                   │
-│     ▸ Output is restricted to an enum + typed slots. By grammar.     │
-│     ▸ The model CANNOT emit a raw DB value. Ever.                    │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │  IntentExtraction (validated JSON)
-┌────────────────────────────▼─────────────────────────────────────────┐
-│ L3  KNOWLEDGE LAYER                                                  │
-│     WorldKnowledge (vector store) · EmbeddingGemma-308M              │
-│     ▸ world lore   : "this district has no legal employment"         │
-│     ▸ agent memory : distilled from the player's own order_log       │
-│     ▸ learned skill: written by the Cold Path (see §5)               │
-│     ▸ This is what turns a random punishment into a *fair* one.      │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │  grounded context
-┌────────────────────────────▼─────────────────────────────────────────┐
-│ L4  JUDGMENT LAYER                            ⚖ 100% DETERMINISTIC   │
-│     Java · no LLM · no randomness beyond a fixed seed                │
-│                                                                      │
-│     AmbiguityScorer  → score 0–100, itemized and explainable         │
-│     OutcomeBand      → FAITHFUL | DRIFT | MISINTERPRET | CATASTROPHE │
-│     OutcomeResolver  → seed = hash(playerId, orderSeq, prompt)       │
-│     MisreadTable     → hand-authored CSV. Never LLM-improvised.      │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │  ResolvedAction (enum + clamped params)
-┌────────────────────────────▼─────────────────────────────────────────┐
-│ L5  STATE LAYER                                                      │
-│     Spring Boot 3 · Spring Data JPA · MySQL                          │
-│     PlayerEntity · TickSimulator (@Scheduled, pure Java)             │
-│     order_log — event-sourced, replayable, auditable                 │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │
-┌────────────────────────────▼─────────────────────────────────────────┐
-│ L6  LITERACY LAYER                        ★ the actual product ★     │
-│     Interpretation Card   "why the AI understood it that way"        │
-│     Ambiguity Breakdown   which word was vague, which slot was empty │
-│     Rephrase Coach        "had you written X, you would have got Y"  │
-│     Replay & Share        your agent's hall of shame, as a timeline  │
-└──────────────────────────────────────────────────────────────────────┘
+```text
+Vibe-Unbound/
+├── .github
+├── client
+├── server
+├── contracts
+├── infra
+├── docs
+├── ai-service          # 분리 조건 충족 시
+├── assets-source       # 원본 에셋 증가 시
+├── admin               # 운영 도구 필요 시
+└── simulation-worker   # 대규모 비동기 계산 필요 시
 ```
 
-### 4.2 Design Rules
+## Core Repositories
 
-> **Rule 1 — The LLM interprets. Java judges.**
-> 비결정적 요소는 L2에만 존재합니다. L4는 완전히 결정적이며, 같은 입력은 언제나 같은 재앙을 낳습니다. 그래야 JUnit으로 테스트하고, 리플레이하고, 밸런싱할 수 있습니다.
-
-> **Rule 2 — The engine runs without the LLM.**
-> L4/L5는 rule-based parser만으로도 완전히 동작합니다. LLM은 개발 순서상 **마지막에** 붙습니다.
-
-> **Rule 3 — The LLM can never write to the database.**
-> GBNF 문법이 출력을 enum과 typed slot으로 강제합니다. Prompt injection의 표면적이 구조적으로 존재하지 않습니다.
-
----
-
-## 5. The Two-Path LLM Design
-
-같은 GPU, 같은 모델. 하지만 **역할과 시간축이 완전히 다른 두 경로**로 나눕니다.
-
-```
-                     ┌───────────────────────────────────────────┐
-                     │      Gemma 4 E4B  ·  single RTX 5070      │
-                     └──────┬─────────────────────────┬──────────┘
-                            │                         │
-      ┌─────────────────────▼──────┐   ┌──────────────▼─────────────────────┐
-      │  🔥 HOT PATH               │   │  ❄ COLD PATH                        │
-      │  "The Interpreter"         │   │  "The Student"                      │
-      ├────────────────────────────┤   ├─────────────────────────────────────┤
-      │ trigger  : 유저 명령 1건    │   │ trigger  : @Scheduled (nightly)     │
-      │ engine   : llama.cpp + GBNF│   │ engine   : Hermes Agent (Nous)      │
-      │ thinking : OFF             │   │ thinking : ON                       │
-      │ agent    : ❌ 없음          │   │ agent    : ✅ skill + persistent mem │
-      │ output   : strict JSON     │   │ output   : lore / skill documents   │
-      │ latency  : ~1s (target)    │   │ latency  : 무제한 (오프라인)         │
-      │ blocking : YES             │   │ blocking : NO                       │
-      └────────────┬───────────────┘   └──────────────┬──────────────────────┘
-                   │                                  │
-                   │ IntentExtraction                 │ writes distilled knowledge
-                   │                                  ▼
-                   │                       ┌────────────────────────┐
-                   │  ◀────── RAG ─────────│    WorldKnowledge      │
-                   │                       │    (vector store)      │
-                   ▼                       └────────────────────────┘
-      ┌────────────────────────────┐                  ▲
-      │  L4  JUDGMENT (Java)       │                  │
-      │  deterministic · seeded    │───── order_log ──┘
-      └────────────────────────────┘
-```
-
-### Why split?
-
-| | 만약 합쳤다면 | 분리했기 때문에 |
+| Repository | Status | Purpose |
 |---|---|---|
-| 응답 지연 | 에이전트 루프 = 수십 초 | **~1초** |
-| 결정성 | 매번 다른 재앙 → 테스트 불가 | **재현 가능** |
-| 장애 | LLM 죽으면 게임 정지 | rule-based로 **자동 폴백** |
-| 학습 | 학습이 유저를 기다리게 함 | **밤에 조용히 성장** |
+| `client` | Active | React UI와 Phaser 게임 클라이언트 |
+| `server` | Planned | Spring Boot 기반 메인 게임 서버 |
+| `contracts` | Planned | OpenAPI, JSON Schema, Event Contract |
+| `infra` | Planned | Docker, Deployment, Monitoring |
+| `docs` | Planned | Product, IA, Architecture, Design 문서 |
+| `.github` | Planned | Organization 공통 정책과 템플릿 |
 
-### The Cold Path is the "studying agent"
+## Future Repositories
 
-Hermes Agent는 경험을 재사용 가능한 skill로 바꾸고, 세션 간에 지속되는 메모리를 유지하는 학습 루프를 가진 오픈소스 에이전트입니다. 우리는 이것을 **게임 세계를 공부하는 학생**으로 씁니다.
-
-```
-매일 밤, Cold Path가 도는 일:
-
-  1. READ    order_log        → "유저들이 '돈 벌어와'를 100번 말했다"
-  2. ANALYZE outcomes         → "그 중 40번이 ROB_BANK로 귀결됐다"
-  3. DISTILL skill            → "이 세계에서 '돈'은 합법 경로가 존재하지 않는다"
-  4. WRITE   WorldKnowledge   → 다음 해석의 RAG 컨텍스트가 된다
-```
-
-**결과: 시간이 갈수록 에이전트의 오해가 더 '그럴듯해집니다.'**
-그리고 이 학습 과정 자체를 터미널에 노출하는 것이, 곧 L6 Literacy Layer의 콘텐츠입니다.
-
----
-
-## 6. Request Lifecycle
-
-```
- USER                L1          L2 (Gemma4)    L3 (RAG)     L4 (Java)      L5 (DB)
-  │                   │              │              │            │              │
-  │ "돈 좀 빨리 벌어와" │              │              │            │              │
-  ├──────────────────▶│              │              │            │              │
-  │                   │ POST /preview│              │            │              │
-  │                   ├─────────────────────────────────────────▶│              │
-  │                   │              │              │            │ load player  │
-  │                   │              │              │            ├─────────────▶│
-  │                   │              │              │            │◀─────────────┤
-  │                   │              │◀─ prompt + player state ──┤              │
-  │                   │              │              │            │              │
-  │                   │              ├─ retrieve ──▶│            │              │
-  │                   │              │◀─ lore+memory┤            │              │
-  │                   │              │              │            │              │
-  │                   │              │ GBNF-forced JSON:         │              │
-  │                   │              │ { candidates:[...],       │              │
-  │                   │              │   slots:{},               │              │
-  │                   │              │   vague_terms:["좀","빨리"]}              │
-  │                   │              ├──────────────────────────▶│              │
-  │                   │              │              │            │ AmbiguityScorer
-  │                   │              │              │            │   → 88  CATASTROPHE
-  │                   │              │              │            │ OutcomeResolver
-  │                   │              │              │            │   seed=hash(...)
-  │                   │              │              │            │   → ROB_BANK
-  │                   │◀── InterpretationCard ──────────────────┤              │
-  │◀── "Execute? [y]" ┤              │              │            │              │
-  │                   │              │              │            │              │
-  │  y                │              │              │            │              │
-  ├──────────────────▶│ POST /commit │              │            │              │
-  │                   ├─────────────────────────────────────────▶│ @Transactional
-  │                   │              │              │            │ apply penalties
-  │                   │              │              │            ├─────────────▶│
-  │                   │              │              │            │ append order_log
-  │                   │              │              │            ├─────────────▶│
-  │◀── "Reputation -900. Wanted: MAX." ──────────────────────────┤              │
-```
-
-**Preview / Commit 2단계가 철학의 핵심입니다.**
-사고는 나되, "내가 승인했다"는 흔적이 남습니다. 그래야 억울함이 책임감이 됩니다.
-(Hardcore mode에서는 preview를 끌 수 있습니다.)
-
----
-
-## 7. Component Reference
-
-| Component | Layer | Lang | Deterministic? | Responsibility |
-|---|---|---|---|---|
-| `TerminalUI` | L1 | JS | — | 명령 입력, 카드 렌더링 |
-| `LlmParser` | L2 | Java→HTTP | ❌ | Gemma 4 호출, GBNF 강제 |
-| `RuleBasedParser` | L2 | Java | ✅ | LLM 장애 시 폴백 (키워드/정규식) |
-| `IntentExtraction` | L2 | Java | — | LLM 출력의 유일한 DTO |
-| `WorldKnowledge` | L3 | Java | ❌ | lore + memory + skill 검색 |
-| `HermesStudent` | L3 | Python | ❌ | 야간 학습 루프 (Cold Path) |
-| **`AmbiguityScorer`** | L4 | Java | ✅ | 0–100 점수 + 항목별 근거 |
-| **`OutcomeResolver`** | L4 | Java | ✅ | seed 기반 결과 확정 |
-| `MisreadTable` | L4 | CSV | ✅ | 수기 작성된 오해 규칙 |
-| `StateEngine` | L5 | Java | ✅ | `@Transactional` 상태 전이 |
-| `TickSimulator` | L5 | Java | ✅ | `@Scheduled` idle 진행. **GPU 안 씀** |
-| `OrderLog` | L5 | JPA | ✅ | 이벤트 소싱 + 감사 로그 |
-| `InterpretationCard` | L6 | Java | ✅ | 설명 가능성 산출물 |
-
----
-
-## 8. The Determinism Contract
-
-```java
-// 같은 플레이어가, 같은 순번에, 같은 문장을 쓰면
-// 항상 같은 재앙이 일어난다. 예외 없이.
-long seed = Objects.hash(playerId, orderSeq, rawPrompt);
-```
-
-| Score | Band | 결과 |
-|---|---|---|
-| 0 – 29 | `FAITHFUL` | 의도대로 실행 |
-| 30 – 59 | `DRIFT` | 실행되나 비효율 (시간 ×2, 보상 ÷2) |
-| 60 – 84 | `MISINTERPRET` | 논리적으로 파생된 엉뚱한 행동 |
-| 85 – 100 | `CATASTROPHE` | `ROB_BANK` 급. Wanted Level MAX |
-
-```java
-int score = 0;
-score += missingRequiredSlots * 20;      // 필수 슬롯 누락
-score += (int)((1.0 - topConfidence)*30); // 낮은 확신
-score += rivalIntentCount * 15;           // 경쟁 의도 존재
-score += vagueTerms.size() * 10;          // 모호 어휘
-score  = Math.min(score, 100);
-```
-
-**이 표와 이 공식은 게임 내에 전부 공개됩니다.**
-규칙이 공개된 처벌만이 "책임"이 됩니다. 숨겨진 처벌은 그냥 횡포입니다.
-
----
-
-## 9. Data Model
-
-| Table | 목적 | 핵심 컬럼 |
-|---|---|---|
-| `player` | 플레이어 상태 | `id`, `gold`, `reputation`, `wanted_level`, `agent_comprehension` |
-| **`order_log`** | **이벤트 소싱 / 감사 / 리플레이** | `id`, `player_id`, `seq`, `raw_prompt`, `extraction_json`, `ambiguity_score`, `outcome_band`, `resolved_action`, `seed`, `previewed_at`, `committed_at` |
-| `state_snapshot` | tick 성능 최적화 | `player_id`, `tick`, `state_json` |
-| `misread_rule` | 밸런싱 테이블 (from CSV) | `intent`, `band`, `result_action`, `weight` |
-| `world_lore` | RAG 원본 | `id`, `district`, `text`, `embedding` |
-| `learned_skill` | Cold Path 산출물 | `id`, `summary`, `evidence_order_ids`, `learned_at` |
-
-> `order_log` 하나로 **리플레이, 밸런싱 분석, "내 에이전트 흑역사 타임라인" 공유 기능**이 전부 공짜로 나옵니다.
-
----
-
-## 10. API Surface
-
-| Method | Endpoint | 설명 | DB 변경 |
-|---|---|---|---|
-| `POST` | `/api/orders/preview` | 명령 해석 + Interpretation Card 반환 | ❌ |
-| `POST` | `/api/orders/{id}/commit` | 승인. 상태 전이 실행 | ✅ |
-| `POST` | `/api/orders/{id}/rephrase` | 재작성. 이전 preview 폐기 | ❌ |
-| `GET` | `/api/players/{id}` | 현재 상태 | ❌ |
-| `GET` | `/api/players/{id}/timeline` | order_log 기반 흑역사 타임라인 | ❌ |
-| `GET` | `/api/players/{id}/replay/{seq}` | seed 기반 결정적 리플레이 | ❌ |
-| `GET` | `/api/codex/bands` | 처벌 규칙 공개 (투명성) | ❌ |
-
----
-
-## 11. Tech Stack & Hardware
-
-### Stack
-
-| Domain | Stack |
+| Repository | 생성 조건 |
 |---|---|
-| **Backend** | `Java 21` · `Spring Boot 3` · `Spring Data JPA` · `MySQL` |
-| **AI — Hot Path** | `Gemma 4 E4B` (Q4_K_M) · `llama.cpp` · **GBNF grammar-constrained decoding** |
-| **AI — Cold Path** | `Hermes Agent` (Nous Research) · OpenAI-compatible local endpoint |
-| **AI — Retrieval** | `EmbeddingGemma-308M` · vector store |
-| **Frontend** | `Vanilla JS` · Web Terminal UI · `Vercel` |
-| **Infra** | `Docker Compose` · `Cloudflare Tunnel` · single-node |
+| `ai-service` | AI 기능을 독립 배포하거나 Python 기반 평가가 필요할 때 |
+| `assets-source` | Aseprite, PSD, WAV 등 원본 바이너리가 커질 때 |
+| `admin` | 사용자, 보상, 로그, 밸런스 운영 화면이 필요할 때 |
+| `simulation-worker` | 오프라인 진행과 대량 시뮬레이션이 서버에 부담을 줄 때 |
 
-### Hardware Budget — one RTX 5070 (12 GB)
+---
 
-| 항목 | VRAM |
+# 6. Repository Responsibilities
+
+## 6.1 `client`
+
+브라우저에서 실행되는 실제 게임 클라이언트입니다.
+
+### Technology
+
+- React
+- TypeScript
+- Vite
+- Phaser
+- React Router
+- Zustand 또는 기존 상태관리 도구
+- MSW
+- Vitest
+- React Testing Library
+- Playwright
+
+### Responsibilities
+
+- Boot
+- 로그인과 회원가입
+- 게스트 시작
+- 온보딩
+- 메인 허브
+- 명령 작성과 수정
+- 명령 해석 미리보기
+- 모호성 경고
+- 출정 준비
+- 게임 HUD
+- 인벤토리
+- 캐릭터
+- 책임 로그
+- 결과 정산
+- Phaser 게임 런타임
+- React와 Phaser 사이의 Typed Bridge
+
+### Recommended Structure
+
+```text
+client/
+├── src/
+│   ├── app/
+│   │   ├── router.tsx
+│   │   ├── providers/
+│   │   ├── guards/
+│   │   └── bootstrap/
+│   ├── features/
+│   │   ├── auth/
+│   │   ├── onboarding/
+│   │   ├── hub/
+│   │   ├── commands/
+│   │   ├── expedition/
+│   │   ├── settlement/
+│   │   ├── character/
+│   │   ├── inventory/
+│   │   └── responsibility-log/
+│   ├── game/
+│   │   ├── config/
+│   │   ├── scenes/
+│   │   ├── entities/
+│   │   ├── systems/
+│   │   ├── simulation/
+│   │   ├── bridge/
+│   │   ├── lighting/
+│   │   ├── particles/
+│   │   ├── camera/
+│   │   ├── audio/
+│   │   └── assets/
+│   ├── shared/
+│   └── mocks/
+├── public/
+├── tests/
+└── docs/
+```
+
+### React and Phaser Boundary
+
+```text
+React
+├── 인증
+├── 라우팅
+├── 폼
+├── 허브
+├── 메뉴
+├── HUD
+├── 명령 편집기
+└── 결과 화면
+
+Phaser
+├── 게임 루프
+├── 월드
+├── 캐릭터
+├── 몬스터
+├── 타일맵
+├── 카메라
+├── 전투 렌더링
+├── 조명
+├── 파티클
+└── 공간 오디오 이벤트
+```
+
+### Client Rules
+
+- React state로 프레임 단위 게임 월드를 렌더링하지 않습니다.
+- 게임 오브젝트마다 DOM Element를 만들지 않습니다.
+- Phaser Scene 하나에 모든 로직을 넣지 않습니다.
+- 시뮬레이션 상태와 렌더링 상태를 분리합니다.
+- Mock 데이터는 API 계층을 통해 사용합니다.
+- `client`에 백엔드 Secret을 저장하지 않습니다.
+
+---
+
+## 6.2 `server`
+
+Spring Boot 기반 메인 게임 서버입니다.
+
+초기에는 마이크로서비스가 아닌 **모듈러 모놀리스**로 구현합니다.
+
+### Technology
+
+- Java
+- Spring Boot
+- Spring Security
+- Spring Data JPA
+- MySQL
+- Redis
+- Flyway
+- OpenAPI
+- Docker
+
+### Responsibilities
+
+- 계정과 인증
+- 캐릭터 프로필
+- 명령 저장
+- 명령 AST 검증
+- 명령 우선순위
+- 지역 데이터
+- 아이템 데이터
+- Run 생성과 저장
+- 결과 검증
+- 오프라인 진행
+- 보상 정산
+- 책임 로그
+- 인벤토리
+- 장비
+- 캐릭터 성장
+
+### Recommended Structure
+
+```text
+server/
+├── src/main/java/com/vibeunbound/
+│   ├── auth/
+│   ├── account/
+│   ├── player/
+│   ├── command/
+│   ├── expedition/
+│   ├── run/
+│   ├── settlement/
+│   ├── offline/
+│   ├── inventory/
+│   ├── progression/
+│   ├── responsibilitylog/
+│   └── shared/
+├── src/main/resources/
+│   ├── db/migration/
+│   └── application.yml
+├── src/test/
+├── Dockerfile
+└── docs/
+```
+
+### Initial Rule
+
+초기에는 다음 저장소나 서비스를 따로 만들지 않습니다.
+
+```text
+auth-service
+player-service
+inventory-service
+run-service
+settlement-service
+```
+
+도메인과 패키지 경계를 먼저 명확하게 유지하고, 배포와 확장의 필요성이 확인된 뒤 분리합니다.
+
+### Transaction Principles
+
+- Run 생성과 초기 자원 차감은 하나의 트랜잭션으로 처리
+- 결과 정산은 중복 요청에도 안전하도록 Idempotent하게 구성
+- 보상 지급과 Run 종료 상태 변경의 원자성 보장
+- 책임 로그는 정산 결과와 연결
+- 클라이언트가 제출한 최종 보상을 그대로 신뢰하지 않음
+
+---
+
+## 6.3 `contracts`
+
+프론트엔드, 백엔드, AI 서비스가 공유하는 기계 판독 가능한 계약 저장소입니다.
+
+### Responsibilities
+
+- OpenAPI Specification
+- JSON Schema
+- Event Schema
+- 요청과 응답 예제
+- Breaking Change 관리
+- TypeScript Client 생성
+- 계약 버전 관리
+
+### Recommended Structure
+
+```text
+contracts/
+├── openapi/
+│   └── openapi.yaml
+├── schemas/
+│   ├── command.schema.json
+│   ├── run-event.schema.json
+│   ├── responsibility-log.schema.json
+│   └── offline-report.schema.json
+├── events/
+│   └── event-catalog.md
+├── examples/
+├── scripts/
+└── README.md
+```
+
+### Contract Flow
+
+```mermaid
+flowchart LR
+    SERVER[server] --> CONTRACTS[contracts]
+    CONTRACTS --> CLIENT[client]
+    CONTRACTS --> ADMIN[admin]
+    CONTRACTS --> AI[ai-service]
+```
+
+### Rules
+
+- 프론트와 백엔드가 DTO를 각각 수작업으로 중복 정의하지 않습니다.
+- OpenAPI 또는 JSON Schema를 기준으로 타입을 생성합니다.
+- 명령 AST 변경은 하위 호환성을 확인합니다.
+- 계약 변경은 `client`와 `server` 담당자 모두 검토합니다.
+- Breaking Change는 버전과 Migration Plan을 포함합니다.
+
+---
+
+## 6.4 `infra`
+
+개발, 테스트, 운영 환경의 인프라 구성을 관리합니다.
+
+### Responsibilities
+
+- Docker Compose
+- Reverse Proxy
+- AWS Infrastructure
+- Domain
+- HTTPS
+- MySQL
+- Redis
+- Object Storage
+- CI/CD
+- Monitoring
+- Log Collection
+- Backup
+- Environment Template
+
+### Recommended Structure
+
+```text
+infra/
+├── compose/
+│   ├── compose.local.yml
+│   ├── compose.dev.yml
+│   └── compose.prod.yml
+├── terraform/
+│   ├── modules/
+│   └── environments/
+│       ├── dev/
+│       ├── staging/
+│       └── prod/
+├── nginx/
+├── monitoring/
+├── scripts/
+└── docs/
+```
+
+### Secret Policy
+
+저장 가능한 값:
+
+```env
+DB_HOST=
+DB_PORT=
+REDIS_HOST=
+LLM_PROVIDER=
+LOG_LEVEL=
+```
+
+저장하면 안 되는 값:
+
+```env
+DB_PASSWORD=real-password
+JWT_SECRET=real-secret
+OPENAI_API_KEY=real-key
+AWS_SECRET_ACCESS_KEY=real-key
+```
+
+실제 Secret은 다음 중 하나에서 관리합니다.
+
+- GitHub Actions Secrets
+- AWS Secrets Manager
+- AWS Systems Manager Parameter Store
+- 동등한 Secret Manager
+
+---
+
+## 6.5 `docs`
+
+Organization 전체에서 공유하는 사람이 읽는 문서를 관리합니다.
+
+### Recommended Structure
+
+```text
+docs/
+├── product/
+│   ├── vision.md
+│   ├── game-loop.md
+│   └── roadmap.md
+├── ia/
+│   ├── sitemap.md
+│   ├── user-flow.md
+│   ├── screen-spec.md
+│   └── state-machine.md
+├── architecture/
+│   ├── system-context.md
+│   ├── container-diagram.md
+│   ├── data-flow.md
+│   └── adr/
+├── design/
+│   ├── design-system.md
+│   ├── typography.md
+│   ├── color.md
+│   └── motion.md
+├── game-design/
+│   ├── commands.md
+│   ├── combat.md
+│   ├── progression.md
+│   ├── economy.md
+│   └── offline-system.md
+├── art/
+│   ├── pixel-art-guide.md
+│   ├── asset-pipeline.md
+│   └── glimmer-woods-art-bible.md
+└── api/
+    └── overview.md
+```
+
+### Documentation Boundary
+
+| 문서 종류 | 위치 |
 |---|---|
-| Gemma 4 E4B (Q4_K_M) | ~3.5 GB |
-| KV cache (batch 8, 4K ctx) | ~2.0 GB |
-| EmbeddingGemma-308M | ~0.7 GB |
-| CUDA / runtime | ~1.0 GB |
-| **합계** | **~7.2 GB** |
-| **여유** | **~4.8 GB** ✅ |
+| OpenAPI 원본 | `contracts` |
+| JSON Schema 원본 | `contracts` |
+| API 설명 문서 | `docs/api` |
+| 시스템 전체 아키텍처 | `docs/architecture` |
+| 저장소 내부 구현 문서 | 각 저장소의 `docs/` |
+| 디자인 시스템 | `docs/design` |
+| 게임 규칙과 밸런스 | `docs/game-design` |
 
-| Target | Value |
+---
+
+## 6.6 `.github`
+
+GitHub Organization 전체에 적용되는 공통 정책과 템플릿입니다.
+
+### Recommended Structure
+
+```text
+.github/
+├── profile/
+│   └── README.md
+├── ISSUE_TEMPLATE/
+│   ├── bug_report.yml
+│   ├── feature_request.yml
+│   ├── research.yml
+│   ├── game_design.yml
+│   └── art_request.yml
+├── workflow-templates/
+├── PULL_REQUEST_TEMPLATE.md
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
+├── SECURITY.md
+└── SUPPORT.md
+```
+
+### Responsibilities
+
+- Organization 프로필
+- Issue Template
+- Pull Request Template
+- 기여 규칙
+- 보안 정책
+- 공통 Workflow Template
+- 지원과 문의 방식
+
+> `CODEOWNERS`는 각 저장소의 `.github/CODEOWNERS`에 두는 것을 기본으로 합니다. 저장소별 책임 범위가 다르기 때문입니다.
+
+---
+
+## 6.7 `ai-service`
+
+초기에는 생성하지 않아도 됩니다.
+
+Spring Boot `server` 내부의 `command` 모듈에서 시작하고 다음 조건이 생기면 분리합니다.
+
+### Separation Conditions
+
+- Python 기반 모델 또는 평가 코드 필요
+- AI 기능을 별도로 배포해야 함
+- AI 요청량이 일반 API와 다른 방식으로 확장됨
+- 여러 LLM Provider를 라우팅해야 함
+- Prompt Evaluation과 Dataset 관리가 필요함
+- AI 장애를 일반 게임 API 장애와 분리해야 함
+
+### Recommended Structure
+
+```text
+ai-service/
+├── app/
+│   ├── api/
+│   ├── interpreter/
+│   ├── prompts/
+│   ├── validation/
+│   └── providers/
+├── datasets/
+├── evaluations/
+├── tests/
+├── Dockerfile
+└── README.md
+```
+
+### Responsibility Boundary
+
+AI 서비스는 명령 해석 후보를 생성할 수 있지만, 최종 실행 가능 여부는 서버의 검증 계층이 결정합니다.
+
+```text
+LLM Output
+→ Schema Validation
+→ Domain Validation
+→ Allowed Metric Check
+→ Allowed Action Check
+→ Server Decision
+```
+
+---
+
+## 6.8 `assets-source`
+
+Aseprite, PSD, Krita, WAV 등의 제작 원본을 관리합니다.
+
+### Recommended Structure
+
+```text
+assets-source/
+├── characters/
+│   ├── player/
+│   └── enemies/
+├── environments/
+├── ui/
+├── vfx/
+├── normal-maps/
+├── audio-source/
+├── exports/
+└── licenses/
+```
+
+### Asset Flow
+
+```mermaid
+flowchart LR
+    SOURCE[assets-source] --> EXPORT[Export and Atlas Build]
+    EXPORT --> CLIENT[client runtime assets]
+```
+
+### Rules
+
+- 원본 바이너리는 Git LFS 사용
+- 런타임 PNG, Atlas JSON, OGG는 `client`
+- 원본과 Export 결과를 구분
+- 라이선스 문서 필수
+- 파일명 규칙 통일
+- 상용 게임에서 추출한 에셋 사용 금지
+
+---
+
+## 6.9 `admin`
+
+운영 도구가 필요해질 때 생성합니다.
+
+### Responsibilities
+
+- 사용자 검색
+- 계정 상태 관리
+- 제재와 해제
+- 명령 해석 결과 조회
+- 책임 로그 조회
+- 아이템과 보상 지급
+- 게임 밸런스 데이터 관리
+- 지역과 아이템 데이터 관리
+- 서버 상태 확인
+- 운영 감사 로그
+
+### Security
+
+- 일반 게임 API와 운영 API 분리
+- 관리자 권한 분리
+- 모든 변경 기록 감사 로그 저장
+- 보상 지급과 계정 제재는 이중 확인 지원
+- 운영 계정에 MFA 적용 검토
+
+---
+
+## 6.10 `simulation-worker`
+
+대량 또는 장시간 시뮬레이션을 비동기로 처리합니다.
+
+### Separation Conditions
+
+- 오프라인 진행 계산 시간이 길어짐
+- 다수 사용자의 시뮬레이션이 동시에 실행됨
+- 메인 API 응답 지연이 발생함
+- Run Replay와 대량 결과 예측이 필요함
+- 재시도가 가능한 작업 큐가 필요함
+
+### Responsibilities
+
+- 오프라인 진행
+- Run 결과 계산
+- 대량 명령 평가
+- 로그 집계
+- 비동기 보상 계산
+- 실패 작업 재처리
+
+---
+
+# 7. System Architecture
+
+## High-Level Architecture
+
+```mermaid
+flowchart LR
+    USER[Player Browser]
+    CLIENT[client<br/>React + Phaser]
+    SERVER[server<br/>Spring Boot]
+    CONTRACTS[contracts]
+    DB[(MySQL)]
+    REDIS[(Redis)]
+    AI[ai-service<br/>Optional]
+    WORKER[simulation-worker<br/>Optional]
+    STORAGE[(Object Storage)]
+
+    USER --> CLIENT
+    CLIENT --> SERVER
+    CLIENT -. generated types .-> CONTRACTS
+    SERVER -. schemas .-> CONTRACTS
+    SERVER --> DB
+    SERVER --> REDIS
+    SERVER --> STORAGE
+    SERVER --> AI
+    SERVER --> WORKER
+```
+
+## Client Runtime
+
+```mermaid
+flowchart LR
+    REACT[React Router and UI]
+    BRIDGE[Typed Event Bridge]
+    STORE[Serializable Simulation State]
+    PHASER[Phaser Scenes]
+    WEBGL[WebGL Renderer]
+
+    REACT <--> BRIDGE
+    BRIDGE <--> STORE
+    BRIDGE <--> PHASER
+    PHASER --> WEBGL
+```
+
+## Command Execution
+
+```mermaid
+flowchart TD
+    INPUT[Natural Language Command]
+    INTERPRETER[Interpreter]
+    AST[Typed JSON AST]
+    SCHEMA[Schema Validation]
+    DOMAIN[Domain Validation]
+    STORE[Command Persistence]
+    SIM[Simulation]
+    RESULT[Settlement]
+    LOG[Responsibility Log]
+
+    INPUT --> INTERPRETER
+    INTERPRETER --> AST
+    AST --> SCHEMA
+    SCHEMA --> DOMAIN
+    DOMAIN --> STORE
+    STORE --> SIM
+    SIM --> RESULT
+    RESULT --> LOG
+```
+
+---
+
+# 8. Main Product Flow
+
+```mermaid
+flowchart TD
+    A[Boot] --> B{Session Valid?}
+    B -- No --> C[Login or Guest]
+    B -- Yes --> D[Bootstrap]
+    C --> D
+
+    D --> E{Profile Exists?}
+    E -- No --> F[Onboarding]
+    E -- Yes --> G{Offline Report?}
+
+    F --> H[Main Hub]
+    G -- Yes --> I[Offline Settlement]
+    G -- No --> H
+    I --> H
+
+    H --> J[Command Lab]
+    H --> K[Expedition Prepare]
+    J --> K
+
+    K --> L[Active Loop]
+    L --> M{Run Result}
+
+    M --> N[Death]
+    M --> O[Retreat]
+    M --> P[Complete]
+
+    N --> Q[Settlement and Responsibility Log]
+    O --> Q
+    P --> Q
+
+    Q --> R{Command Revision?}
+    R -- Yes --> J
+    R -- No --> H
+```
+
+---
+
+# 9. Main Routes
+
+```text
+/auth/login
+/auth/signup
+/auth/recover
+
+/onboarding/character
+/onboarding/intro
+/onboarding/contract
+/onboarding/first-command
+/onboarding/incident
+/onboarding/result
+
+/game/hub
+/game/commands
+/game/commands/new
+/game/commands/:commandId
+/game/prepare
+/game/run/:runId
+/game/result/:runId
+/game/offline-report
+/game/character
+/game/inventory
+/game/logs
+/game/settings
+```
+
+---
+
+# 10. Initial API Scope
+
+```text
+POST   /api/auth/login
+POST   /api/auth/guest
+POST   /api/auth/logout
+POST   /api/auth/signup
+POST   /api/auth/recover
+GET    /api/bootstrap
+
+POST   /api/profiles
+GET    /api/profiles/current
+PATCH  /api/profiles/current
+
+GET    /api/commands
+POST   /api/commands/preview
+POST   /api/commands
+GET    /api/commands/{commandId}
+PATCH  /api/commands/{commandId}
+DELETE /api/commands/{commandId}
+POST   /api/commands/{commandId}/activate
+
+GET    /api/regions
+
+POST   /api/runs
+GET    /api/runs/{runId}
+POST   /api/runs/{runId}/pause
+POST   /api/runs/{runId}/resume
+POST   /api/runs/{runId}/retreat
+GET    /api/runs/{runId}/logs
+GET    /api/runs/{runId}/responsibility-logs
+
+GET    /api/offline-report
+POST   /api/offline-report/claim
+
+GET    /api/character
+GET    /api/inventory
+PATCH  /api/equipment
+```
+
+---
+
+# 11. Initial Data Domains
+
+| Domain | Main Responsibility |
 |---|---|
-| Hot path latency | ~1 s |
-| Throughput | ~3 orders/sec (batched) |
-| Concurrent active users | **50 CCU** (stretch: 150) |
-
-**Self-hosted by design.** 클라우드 AI API를 쓰지 않습니다.
-GPU 한 장으로 돌아간다는 것을 증명하는 것도 이 프로젝트의 일부입니다.
-
-### Why not tool-calling API?
-
-Gemma 4는 tool call을 네이티브 텍스트 포맷으로 출력하며, 이를 구조화된 `tool_calls`로 파싱하는 데 알려진 문제가 있습니다.
-**우리는 tool-calling API를 쓰지 않습니다.** GBNF 문법으로 출력을 직접 강제하므로, 모델이 어떤 포맷을 선호하든 무관합니다. → **파싱 실패율 0%.**
-
----
-
-## 12. Repositories
-
-| Repo | Layer | Description |
-|---|---|---|
-| [`vibe-core`](#) | L4 · L5 · L6 | Game engine. Deterministic. **Runs without any LLM.** |
-| [`vibe-hermes`](#) | L2 · L3 | Hot-path parser + Cold-path studying agent. |
-| [`vibe-terminal`](#) | L1 | Web terminal UI. |
-| [`vibe-codex`](#) | Data | World lore, `MisreadTable`, balance data. |
-| [`vibe-infra`](#) | Ops | Docker Compose, tunnels, deployment. |
-
-> **`vibe-codex` is not code.**
-> 세계관과 오해 규칙은 CSV와 Markdown입니다.
-> 기획자, 교육자, 작가 — 개발자가 아닌 사람도 PR을 보낼 수 있습니다.
-> 그게 이 프로젝트의 철학과 정확히 맞습니다.
+| Account | 로그인, 계정 상태 |
+| Player | 캐릭터와 플레이어 진행 |
+| Command | 자연어 명령과 AST |
+| Region | 지역, 적, 조우 |
+| Run | 출정과 실행 상태 |
+| Settlement | 보상과 결과 정산 |
+| Responsibility Log | 명령과 사고의 인과관계 |
+| Inventory | 아이템과 장비 |
+| Progression | 레벨, 스킬, 해금 |
+| Offline | 비접속 진행 |
 
 ---
 
-## 13. Roadmap
+# 12. Development Roadmap
 
-| Phase | Goal | GPU? |
-|---|---|---|
-| **P0** | `MisreadTable` — 오해 규칙 30행 수기 작성 | ❌ |
-| **P1** | `AmbiguityScorer` + `OutcomeResolver` + JUnit | ❌ |
-| **P2** | State engine, event-sourced `order_log`, `TickSimulator` | ❌ |
-| **P3** | `RuleBasedParser` + Web Terminal + **Interpretation Card** | ❌ |
-| **P3.5** | `ko-intent-bench` — 한국어 명령 50문항 벤치마크 | ✅ |
-| **P4** | Hot Path — Gemma 4 E4B + GBNF | ✅ |
-| **P5** | Cold Path — Hermes Agent 학습 루프 + `WorldKnowledge` | ✅ |
-| **P6** | Literacy Layer — Rephrase Coach, Replay, Share | ✅ |
+## Phase 0 — Foundation
 
-> **LLM은 마지막에 붙입니다.** AI 없이도 돌아가는 엔진이 먼저입니다.
-> P0–P3은 GPU가 한 번도 필요 없습니다. 그게 좋은 아키텍처의 증거입니다.
+- 기존 프론트엔드 Audit
+- 기술 스택 확정
+- IA 작성
+- 상태머신 작성
+- API 계약 작성
+- Organization과 Repository 구성
+- Branch와 PR 정책 구성
+
+## Phase 1 — Authentication
+
+- Boot
+- Login
+- Signup
+- Guest Login
+- Protected Route
+- Bootstrap Mock API
+- Profile Routing
+
+## Phase 2 — Onboarding
+
+- Character Creation
+- World Introduction
+- First Command
+- Ambiguity Preview
+- First Incident
+- Responsibility Report
+- Corrected Command
+
+## Phase 3 — Main Hub
+
+- Character Summary
+- Active Commands
+- Latest Incident
+- Offline Summary
+- Expedition Entry
+
+## Phase 4 — Command Lab
+
+- Command CRUD
+- Interpretation Preview
+- Ambiguity Score
+- Priority
+- Activation
+- Risk Acknowledgement
+
+## Phase 5 — Functional Vertical Slice
+
+- React ↔ Phaser Bridge
+- Glimmer Woods
+- Player
+- Slime
+- Auto Movement
+- Auto Combat
+- Rest
+- Death
+- Retreat
+- Settlement
+
+## Phase 6 — Graphics Vertical Slice
+
+- Tiled Map
+- Parallax
+- Sprite Animation
+- Lighting
+- Normal Map
+- Particle
+- Camera FX
+- Audio
+- Post Processing
+- Performance Profiling
+
+## Phase 7 — Responsibility System
+
+- Responsibility Log
+- Suggested Rewrite
+- Incident Archive
+- Run Summary
+- Command Revision Flow
+
+## Phase 8 — Offline Progression
+
+- Offline Time Calculation
+- Deterministic Simulation
+- Reward Claim
+- Worker Separation Review
+
+## Phase 9 — Progression
+
+- Inventory
+- Equipment
+- Skills
+- Regions
+- Meta Progression
+- Economy
+
+## Phase 10 — Operations
+
+- Admin
+- Monitoring
+- Analytics
+- Backup
+- Incident Response
+- Production Deployment
 
 ---
 
-## 14. Non-Goals
+# 13. Current Priority
 
-| ❌ | 이유 |
+```text
+Current Stage
+Early Development / Vertical Slice
+
+Current Main Repository
+client
+
+Current Primary Goal
+Login
+→ Command
+→ Glimmer Woods
+→ Incident
+→ Responsibility Log
+→ Command Revision
+```
+
+## Immediate Actions
+
+1. GitHub Organization 생성 또는 정리
+2. `.github` 저장소 생성
+3. 이 README를 `.github/profile/README.md`에 등록
+4. 현재 프론트엔드를 `client`로 이전
+5. `docs`에 Master Specification 등록
+6. `contracts`에 OpenAPI와 JSON Schema 초기화
+7. `server` Spring Boot 프로젝트 초기화
+8. `infra`에 Local Docker Compose 구성
+9. 로그인부터 Phase 단위로 개발
+
+---
+
+# 14. Git Workflow
+
+## Branch Strategy
+
+기본은 `main + short-lived feature branch`입니다.
+
+```text
+main
+feature/*
+fix/*
+refactor/*
+test/*
+docs/*
+chore/*
+art/*
+```
+
+`develop` Branch는 여러 팀의 장기 통합 Branch가 실제로 필요할 때만 추가합니다.
+
+## Branch Examples
+
+```text
+feature/client-login
+feature/command-preview
+feature/server-run-settlement
+fix/duplicate-reward
+refactor/phaser-combat-system
+docs/update-organization-readme
+art/glimmer-woods-atlas
+```
+
+## Commit Convention
+
+```text
+feat: add command interpretation preview
+fix: prevent duplicate run settlement
+refactor: separate combat simulation from Phaser scene
+test: add login routing tests
+docs: document responsibility log schema
+chore: configure lint workflow
+art: add glimmer woods environment atlas
+```
+
+## Pull Request Rule
+
+모든 PR은 다음 내용을 포함합니다.
+
+```text
+Summary
+Changes
+Why
+Screenshots or Video
+Test Result
+Build Result
+Known Risks
+Related Issue
+```
+
+## Merge Policy
+
+- 기본 Merge 방식: Squash Merge
+- CI 실패 시 Merge 금지
+- PR 리뷰 후 Merge
+- 계약 변경은 프론트와 백엔드 모두 검토
+- 인프라 변경은 배포 영향을 명시
+- 보안 관련 변경은 별도 검토
+- Breaking Change는 Migration Plan 포함
+
+---
+
+# 15. Issue Labels
+
+## Area
+
+```text
+area:client
+area:server
+area:contracts
+area:infra
+area:design
+area:gameplay
+area:art
+area:audio
+area:ai
+area:docs
+area:security
+```
+
+## Kind
+
+```text
+kind:feature
+kind:bug
+kind:refactor
+kind:test
+kind:research
+kind:chore
+kind:proposal
+```
+
+## Priority
+
+```text
+priority:p0
+priority:p1
+priority:p2
+priority:p3
+```
+
+## Status
+
+```text
+status:blocked
+status:needs-review
+status:ready
+status:in-progress
+status:needs-design
+status:needs-research
+```
+
+---
+
+# 16. Definition of Done
+
+기능은 다음 조건을 모두 만족해야 완료로 간주합니다.
+
+- 요구사항과 Acceptance Criteria 충족
+- Lint 통과
+- Unit Test 통과
+- Production Build 통과
+- Browser Console Error 없음
+- Network Error 확인
+- 접근성 기본 검증
+- 관련 문서 수정
+- Screenshot 또는 Video 첨부
+- 알려진 제한사항 기록
+- Secret과 개인정보가 포함되지 않음
+
+게임 기능은 추가로 다음을 확인합니다.
+
+- 실제 게임 루프에서 동작
+- 정적 이미지나 GIF로 대체되지 않음
+- React HUD와 Phaser 상태 일치
+- 상태 전이가 명확함
+- 책임 로그 생성 가능
+- 성능 Budget을 초과하지 않음
+
+---
+
+# 17. Quality Standards
+
+## Code Quality
+
+- TypeScript Strict Mode
+- Java의 명확한 Null 처리
+- `any` 남용 금지
+- 검증 없는 Type Assertion 금지
+- 거대한 Component 금지
+- 거대한 단일 Phaser Scene 금지
+- 순수 로직과 렌더링 분리
+- API 계층과 Domain 계층 분리
+- 테스트 가능한 함수
+- 중복 DTO 금지
+- 명시적인 상태 전이
+
+## Backend Reliability
+
+- 트랜잭션 경계 명확화
+- 중복 정산 방지
+- Idempotency 고려
+- 낙관적 또는 비관적 Lock 필요성 검토
+- Flyway Migration 사용
+- 운영 예외 응답 통일
+- 재시도 가능한 작업과 불가능한 작업 구분
+- Client 결과를 무조건 신뢰하지 않음
+
+## Security
+
+- Secret Commit 금지
+- 비밀번호 저장 금지
+- 운영 Token의 `localStorage` 저장 금지
+- 자연어 명령 코드 실행 금지
+- 모든 입력 Schema 검증
+- 관리자 권한 분리
+- Rate Limit 검토
+- Dependency Vulnerability 확인
+- 민감 로그 Masking
+- CORS와 Cookie 정책 명시
+
+## Performance
+
+- 60 FPS 목표
+- Texture Atlas
+- Object Pooling
+- Off-screen Culling
+- Light Budget
+- Particle Budget
+- React 매 프레임 렌더 금지
+- 바이옴 단위 Lazy Loading
+- 장시간 시뮬레이션 Worker 분리 검토
+- 이미지와 오디오 최적화
+
+## Accessibility
+
+- 키보드 접근
+- 명확한 Focus 상태
+- 충분한 텍스트 대비
+- 색상 외 상태 표현
+- `prefers-reduced-motion`
+- UI 확대 대응
+- Form Label
+- 오류 메시지 연결
+- 주요 HUD 정보의 텍스트 대체
+
+## Documentation
+
+- 중요한 구조 변경은 ADR 작성
+- API 변경은 `contracts` 우선
+- 구현과 문서 불일치 방지
+- 조사 문서에 출처와 날짜 기록
+- 폐기된 설계는 상태를 명시
+- README의 실행법 최신 상태 유지
+
+---
+
+# 18. Testing Strategy
+
+## Client
+
+- Unit Test
+- React Component Test
+- Router Test
+- Mock API Test
+- Phaser와 분리된 Simulation Test
+- Playwright E2E
+- Visual Regression 검토
+
+## Server
+
+- Unit Test
+- Slice Test
+- Integration Test
+- Repository Test
+- Security Test
+- Flyway Migration Test
+- Idempotency Test
+- Concurrency Test
+
+## Contracts
+
+- OpenAPI Validation
+- JSON Schema Validation
+- Example Validation
+- Breaking Change Detection
+- Generated Client Build Test
+
+## E2E Main Scenario
+
+```text
+로그인
+→ 프로필 없음
+→ 캐릭터 생성
+→ 첫 명령 작성
+→ 모호성 확인
+→ 출정
+→ 첫 사고
+→ 책임 로그 확인
+→ 명령 수정
+→ 재출정
+```
+
+---
+
+# 19. CI/CD Baseline
+
+모든 코드 저장소는 최소 다음 검사를 수행합니다.
+
+```text
+Formatting
+Lint
+Unit Test
+Build
+Dependency Audit
+Artifact Upload
+```
+
+## Client Additional Checks
+
+```text
+E2E Smoke Test
+Bundle Size Check
+Asset Reference Validation
+```
+
+## Server Additional Checks
+
+```text
+Integration Test
+Flyway Migration Validation
+Container Build
+```
+
+## Contracts Additional Checks
+
+```text
+OpenAPI Validation
+JSON Schema Validation
+Breaking Change Detection
+Client Generation Test
+```
+
+## Infra Additional Checks
+
+```text
+Docker Compose Validation
+Terraform Format
+Terraform Validate
+Security Scan
+```
+
+---
+
+# 20. Environment Strategy
+
+| Environment | Purpose |
 |---|---|
-| Multi-agent party | VRAM · 복잡도 폭발. v2 이후 |
-| Per-user fine-tuning / LoRA | 12 GB로 불가 |
-| Streaming token responses | 1초면 그냥 기다려도 됨 |
-| Login / payment | 데모는 session ID로 충분 |
-| Cloud LLM API | 자체 호스팅 증명이 프로젝트의 일부 |
-| LLM이 결과를 직접 결정 | **철학 위반.** 판정은 언제나 Java |
+| Local | 개발자 로컬 실행 |
+| Dev | 통합 개발 환경 |
+| Staging | 배포 전 검증 |
+| Production | 실제 서비스 |
+
+환경마다 다음을 분리합니다.
+
+- API URL
+- Database
+- Redis
+- Object Storage
+- LLM Provider
+- Log Level
+- Feature Flag
+- Monitoring
+- Cookie Domain
+- CORS Origin
 
 ---
 
-<sub>Built by an AX (AI Experience) Engineer.</sub>
-<sub>`Control, Mistake, and Responsibility.`</sub>
+# 21. Local Development
+
+각 저장소의 실제 README가 최우선입니다.
+
+## Client
+
+```bash
+git clone https://github.com/<organization>/client.git
+cd client
+
+npm install
+npm run dev
+```
+
+## Server
+
+```bash
+git clone https://github.com/<organization>/server.git
+cd server
+
+./gradlew bootRun
+```
+
+Windows:
+
+```powershell
+.\gradlew.bat bootRun
+```
+
+## Infrastructure
+
+```bash
+git clone https://github.com/<organization>/infra.git
+cd infra
+
+docker compose -f compose/compose.local.yml up -d
+```
+
+## Recommended Local Order
+
+```text
+1. MySQL
+2. Redis
+3. server
+4. client
+5. optional ai-service
+6. optional worker
+```
+
+---
+
+# 22. Asset Pipeline
+
+## Tools
+
+| Purpose | Tool |
+|---|---|
+| Sprite Animation | Aseprite |
+| Atlas Packing | TexturePacker 또는 재현 가능한 CLI |
+| Tilemap | Tiled |
+| Normal Map | SpriteIlluminator 또는 대체 도구 |
+| Audio Editing | Audacity 등 |
+| PNG Optimization | pngquant, oxipng 등 |
+
+## Runtime Flow
+
+```text
+Aseprite / Source Files
+→ Export
+→ Texture Atlas
+→ Validation
+→ Client Runtime Assets
+```
+
+## Rules
+
+- Source와 Runtime Asset 분리
+- Atlas 이름과 Animation Tag 통일
+- 원본 해상도와 내부 렌더 해상도 기록
+- License 문서 유지
+- 사용하지 않는 Export 파일 제거
+- 대형 바이너리는 Git LFS 사용
+
+---
+
+# 23. Design System Governance
+
+디자인 시스템은 `docs/design`에서 정의하고 `client`에서 구현합니다.
+
+## Source of Truth
+
+```text
+docs/design/design-system.md
+→ design tokens
+→ client styles
+→ React components
+→ Storybook or equivalent preview
+```
+
+## Managed Elements
+
+- Typography
+- Color
+- Spacing
+- Radius
+- Border
+- Elevation
+- Icon
+- Motion
+- Navigation
+- Button
+- Input
+- Card
+- Modal
+- Tooltip
+- HUD
+- Command Editor
+- Responsibility Log
+
+## Design Rule
+
+일반적인 SaaS Dashboard 형태가 아니라, 게임 화면과 게임 클라이언트 경험을 기준으로 합니다.
+
+---
+
+# 24. Ownership
+
+권장 Team 구조:
+
+| Team | Responsibility |
+|---|---|
+| Frontend | React UI, Phaser Integration |
+| Backend | Spring Boot, Data, Auth, Settlement |
+| Game Systems | Command Rules, Simulation, Balance |
+| Design | IA, UX, Design System |
+| Art | Pixel Art, Animation, VFX |
+| Platform | Infrastructure, CI/CD, Monitoring |
+
+## CODEOWNERS Example
+
+각 저장소의 `.github/CODEOWNERS`에서 관리합니다.
+
+```text
+# client
+*                         @<organization>/frontend
+/src/game/                @<organization>/frontend @<organization>/game-systems
+
+# server
+*                         @<organization>/backend
+/src/main/**/command/     @<organization>/backend @<organization>/game-systems
+
+# contracts
+*                         @<organization>/frontend @<organization>/backend
+
+# infra
+*                         @<organization>/platform
+
+# docs
+/design/                  @<organization>/design
+/game-design/             @<organization>/game-systems
+/art/                     @<organization>/art
+```
+
+실제 Organization과 Team 이름에 맞춰 변경합니다.
+
+---
+
+# 25. Contribution
+
+1. Issue를 생성하거나 기존 Issue를 선택합니다.
+2. 범위와 Acceptance Criteria를 확인합니다.
+3. 짧게 유지되는 Branch를 생성합니다.
+4. 구현과 테스트를 수행합니다.
+5. 관련 문서를 수정합니다.
+6. Pull Request를 생성합니다.
+7. CI와 리뷰를 통과합니다.
+8. Squash Merge합니다.
+
+큰 구조 변경은 코드 작성 전에 Proposal 또는 ADR을 작성합니다.
+
+---
+
+# 26. Decision Records
+
+다음 변경은 ADR을 요구합니다.
+
+- 게임 엔진 교체
+- 상태관리 도구 교체
+- 인증 방식 변경
+- 모놀리스에서 서비스 분리
+- Database 변경
+- 메시지 큐 도입
+- 명령 AST 구조 변경
+- 저장 방식 변경
+- 배포 플랫폼 변경
+- Phaser와 React 경계 변경
+
+ADR 형식:
+
+```text
+Title
+Status
+Context
+Decision
+Alternatives
+Consequences
+Migration Plan
+```
+
+---
+
+# 27. Security Reporting
+
+보안 취약점은 공개 Issue로 등록하지 않습니다.
+
+`.github/SECURITY.md`에 다음 내용을 정의합니다.
+
+- 지원 중인 Version
+- 비공개 신고 방법
+- 응답 예상 시간
+- 공개 절차
+- 보상 정책 여부
+
+민감한 정보가 Git에 Commit된 경우:
+
+```text
+1. Secret 즉시 폐기
+2. 새 Secret 발급
+3. 영향 범위 조사
+4. Git History 제거 필요성 검토
+5. 사고 기록 작성
+6. 재발 방지 조치
+```
+
+---
+
+# 28. License and Asset Rights
+
+라이선스가 확정되기 전까지 모든 코드, 문서, 아트, 오디오 자산은 **All Rights Reserved**로 취급합니다.
+
+오픈소스 라이선스를 적용할 경우 다음을 분리해서 결정합니다.
+
+- Source Code License
+- Documentation License
+- Art Asset License
+- Audio Asset License
+- Third-Party Licenses
+
+각 저장소는 다음 파일을 포함해야 합니다.
+
+```text
+LICENSE
+THIRD_PARTY_NOTICES.md
+```
+
+`assets-source`는 추가로 다음을 포함합니다.
+
+```text
+licenses/
+asset-register.csv
+```
+
+---
+
+# 29. Discussions and Communication
+
+프로젝트 관련 논의는 GitHub Issues와 Discussions를 사용합니다.
+
+| Purpose | Channel |
+|---|---|
+| Bug | Issue `kind:bug` |
+| Feature | Issue `kind:feature` |
+| Research | Issue `kind:research` |
+| Architecture | Discussion 또는 ADR |
+| Game Design | Discussion 또는 `area:gameplay` |
+| Design Proposal | Discussion 또는 `area:design` |
+| Security | Private Security Report |
+| General Question | Discussions Q&A |
+
+---
+
+# 30. Final Goal
+
+Vibe: Unbound의 첫 번째 완성 기준은 많은 콘텐츠가 아닙니다.
+
+다음 하나의 경험을 완성하는 것이 우선입니다.
+
+```text
+사용자가 로그인한다.
+→ 캐릭터를 생성한다.
+→ 자연어 명령을 작성한다.
+→ 시스템이 명령을 해석한다.
+→ 사용자가 모호성을 확인한다.
+→ 캐릭터가 Glimmer Woods로 출정한다.
+→ 실제 Phaser 게임 루프가 실행된다.
+→ 명령 해석으로 사고가 발생한다.
+→ 사용자가 책임 로그를 확인한다.
+→ 사용자가 더 정확한 명령으로 수정한다.
+→ 다시 출정해 결과가 달라진다.
+```
+
+이 Vertical Slice가 안정적으로 동작한 뒤 지역, 아이템, 성장, 오프라인 진행, 운영 도구를 확장합니다.
+
+---
+
+<p align="center">
+  <strong>Vibe: Unbound</strong><br/>
+  Control, Mistake, and Responsibility.
+</p>
